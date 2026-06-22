@@ -1,0 +1,51 @@
+# Compiled class files
+*.class
+
+# Log files
+*.log
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+*.env.local
+
+# Config files (contains API keys)
+src/main/resources/application.yml
+src/main/resources/application-*.yml
+
+# Test files
+src/test/
+test_*.py
+test_*.json
+
+# Docs & eval (not core code)
+docs/
+eval/
+.claude/
+db/
+CLAUDE.md
+DESIGN.md
+phase3_diff.txt
+phase3.diff.txt
