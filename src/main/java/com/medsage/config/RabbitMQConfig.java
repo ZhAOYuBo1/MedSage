@@ -8,6 +8,10 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.core.task.TaskExecutor;
+
+import java.util.concurrent.Executors;
 
 /**
  * RabbitMQ 配置
@@ -15,6 +19,8 @@ import org.springframework.context.annotation.Configuration;
  * 队列结构：
  * - medsage.chat.task: 主队列，接收聊天任务
  * - medsage.chat.task.dlq: 死信队列，处理超时任务
+ *
+ * 使用虚拟线程提升并发能力
  */
 @Configuration
 public class RabbitMQConfig {
@@ -89,7 +95,12 @@ public class RabbitMQConfig {
     }
 
     /**
-     * 消费者工厂 - 配置预取数量和并发
+     * 消费者工厂 - 使用虚拟线程
+     *
+     * 优势：
+     * - 消费者执行 I/O 阻塞（调用 LLM API）时自动卸载
+     * - 平台线程可以处理其他消费者
+     * - 并发能力大幅提升
      */
     @Bean
     public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
@@ -99,7 +110,14 @@ public class RabbitMQConfig {
         factory.setMessageConverter(jsonMessageConverter());
         factory.setPrefetchCount(1); // 每次只预取1条，避免流式任务被阻塞
         factory.setConcurrentConsumers(5); // 并发消费者数
-        factory.setMaxConcurrentConsumers(10); // 最大并发消费者数
+        factory.setMaxConcurrentConsumers(50); // 虚拟线程可以支持更多并发
+
+        // 使用虚拟线程任务执行器
+        SimpleAsyncTaskExecutor taskExecutor = new SimpleAsyncTaskExecutor();
+        taskExecutor.setVirtualThreads(true);
+        taskExecutor.setThreadNamePrefix("rabbit-consumer-");
+        factory.setTaskExecutor(taskExecutor);
+
         return factory;
     }
 }

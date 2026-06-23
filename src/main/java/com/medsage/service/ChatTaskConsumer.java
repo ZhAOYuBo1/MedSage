@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 聊天任务消费者
@@ -22,7 +23,8 @@ import java.util.concurrent.*;
  * 1. 从 RabbitMQ 消费任务消息
  * 2. 调用 Agent 流式接口
  * 3. 每个 token 写入 Redis Stream
- * 4. 结束时写入 [DONE] 标记
+ * 4. 异步风控检测，命中黑名单则中断
+ * 5. 结束时写入 [DONE] 标记
  */
 @Service
 public class ChatTaskConsumer {
@@ -37,15 +39,18 @@ public class ChatTaskConsumer {
     /**
      * 批次超时 - 最多等多久写一次
      */
-    private static final long BATCH_TIMEOUT_MS = 50;
+    private static final long BATCH_TIMEOUT_MS = 10;
 
     private final LlmRoutingAgent routerAgent;
     private final RedisStreamService redisStreamService;
+    private final RiskControlService riskControlService;
 
     public ChatTaskConsumer(LlmRoutingAgent routerAgent,
-                            RedisStreamService redisStreamService) {
+                            RedisStreamService redisStreamService,
+                            RiskControlService riskControlService) {
         this.routerAgent = routerAgent;
         this.redisStreamService = redisStreamService;
+        this.riskControlService = riskControlService;
     }
 
     /**
@@ -75,6 +80,7 @@ public class ChatTaskConsumer {
     /**
      * 执行流式任务
      * 将 Agent 的流式输出写入 Redis Stream
+     * 异步风控检测，命中黑名单则中断
      */
     private void executeStreamTask(String taskId, String message, RunnableConfig config) {
         log.info("开始执行流式任务: taskId={}", taskId);
@@ -82,13 +88,32 @@ public class ChatTaskConsumer {
         // 使用数组来在 lambda 中修改
         final StringBuilder[] batchBufferRef = {new StringBuilder()};
         final long[] lastFlushTimeRef = {System.currentTimeMillis()};
+        final AtomicBoolean blocked = new AtomicBoolean(false);
+        final StringBuilder[] accumulatedRef = {new StringBuilder()}; // 累积文本，用于风控检测
 
         try {
             // 调用 Agent 流式接口，阻塞等待完成
             routerAgent.stream(message, config)
                     .doOnNext(nodeOutput -> {
+                        // 如果已命中风控，不再处理
+                        if (blocked.get()) {
+                            return;
+                        }
+
                         String text = extractTextFromNodeOutput(nodeOutput);
                         if (text != null && !text.isEmpty()) {
+                            // 累积文本
+                            accumulatedRef[0].append(text);
+
+                            // 异步风控检测（不阻塞 token 写入）
+                            String accumulated = accumulatedRef[0].toString();
+                            if (riskControlService.isBlocked(accumulated)) {
+                                log.warn("风控命中，中断流式输出: taskId={}", taskId);
+                                blocked.set(true);
+                                redisStreamService.writeBlocked(taskId);
+                                return;
+                            }
+
                             // 攒批次写入
                             batchBufferRef[0].append(text);
                             long now = System.currentTimeMillis();
@@ -101,6 +126,12 @@ public class ChatTaskConsumer {
                         }
                     })
                     .doOnComplete(() -> {
+                        // 如果已命中风控，不写入结束标记
+                        if (blocked.get()) {
+                            log.info("流式任务被风控中断: taskId={}", taskId);
+                            return;
+                        }
+
                         // 刷出剩余的 token
                         if (batchBufferRef[0].length() > 0) {
                             redisStreamService.writeToken(taskId, batchBufferRef[0].toString());
@@ -114,13 +145,17 @@ public class ChatTaskConsumer {
                     })
                     .doOnError(e -> {
                         log.error("流式任务异常: taskId={}", taskId, e);
-                        redisStreamService.writeError(taskId, e.getMessage());
+                        if (!blocked.get()) {
+                            redisStreamService.writeError(taskId, e.getMessage());
+                        }
                     })
                     .blockLast(); // 阻塞等待流完成
 
         } catch (Exception e) {
             log.error("流式任务执行失败: taskId={}", taskId, e);
-            redisStreamService.writeError(taskId, e.getMessage());
+            if (!blocked.get()) {
+                redisStreamService.writeError(taskId, e.getMessage());
+            }
         }
     }
 

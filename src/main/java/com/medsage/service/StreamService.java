@@ -9,6 +9,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.Executors;
 
 /**
  * SSE 流式服务
@@ -101,6 +102,15 @@ public class StreamService {
                             return;
                         }
 
+                        // 检查风控中断标记
+                        if (RedisStreamService.BLOCKED_MARKER.equals(token)) {
+                            log.warn("SSE 流收到风控中断: taskId={}", taskId);
+                            sink.next("抱歉，这个问题无法回答。");
+                            sink.next("[DONE]");
+                            sink.complete();
+                            return;
+                        }
+
                         // 推送 token
                         sink.next(token);
                     }
@@ -119,6 +129,6 @@ public class StreamService {
             }
 
             log.info("SSE 流被取消: taskId={}", taskId);
-        }).subscribeOn(Schedulers.boundedElastic());
+        }).subscribeOn(Schedulers.fromExecutor(Executors.newVirtualThreadPerTaskExecutor()));
     }
 }

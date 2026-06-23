@@ -39,6 +39,11 @@ public class RedisStreamService {
      */
     public static final String ERROR_MARKER = "[ERROR]";
 
+    /**
+     * 风控中断标记
+     */
+    public static final String BLOCKED_MARKER = "[BLOCKED]";
+
     private final RedisTemplate<String, String> redisTemplate;
     private final RedissonClient redissonClient;
 
@@ -84,6 +89,14 @@ public class RedisStreamService {
     public void writeError(String taskId, String errorMsg) {
         writeToken(taskId, ERROR_MARKER + errorMsg);
         log.error("写入错误标记: taskId={}, error={}", taskId, errorMsg);
+    }
+
+    /**
+     * 写入风控中断标记
+     */
+    public void writeBlocked(String taskId) {
+        writeToken(taskId, BLOCKED_MARKER);
+        log.warn("写入风控中断标记: taskId={}", taskId);
     }
 
     /**

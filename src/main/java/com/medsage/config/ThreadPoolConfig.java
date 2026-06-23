@@ -7,29 +7,21 @@ import java.util.concurrent.*;
 
 /**
  * 线程池配置
- * 用于控制 Agent 并发调用
+ * 使用虚拟线程提升并发能力
  */
 @Configuration
 public class ThreadPoolConfig {
 
     /**
-     * 聊天线程池
-     * - 核心5线程，最大10线程
-     * - 队列100，满时由调用线程执行
+     * 聊天线程池 - 虚拟线程
+     *
+     * 优势：
+     * - 并发能力从 10 提升到 1000+
+     * - I/O 阻塞时自动卸载，不占用平台线程
+     * - 适合调用 LLM API 等 I/O 密集型任务
      */
     @Bean
     public ExecutorService chatExecutor() {
-        return new ThreadPoolExecutor(
-                5,
-                10,
-                60L, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(100),
-                r -> {
-                    Thread t = new Thread(r, "chat-worker");
-                    t.setDaemon(true);
-                    return t;
-                },
-                new ThreadPoolExecutor.CallerRunsPolicy()
-        );
+        return Executors.newVirtualThreadPerTaskExecutor();
     }
 }
